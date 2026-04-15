@@ -1,0 +1,16 @@
+[package]
+name = "github2md"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Export GitHub issues to Markdown files"
+repository = "https://github.com/ianzepp/github2md"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

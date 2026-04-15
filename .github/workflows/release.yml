@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Run tests
+        run: cargo test --locked
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package release archive
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp "target/${TARGET}/release/github2md" dist/github2md
+          archive="github2md-${TAG}-${TARGET}.tar.gz"
+          tar -C dist -czf "dist/${archive}" github2md
+          rm dist/github2md
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "dist/${archive}" > "dist/${archive}.sha256"
+          else
+            shasum -a 256 "dist/${archive}" > "dist/${archive}.sha256"
+          fi
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release bundles
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create GitHub release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" dist/* --clobber
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download release bundles
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate Homebrew formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          chmod +x scripts/render-homebrew-formula.sh
+          scripts/render-homebrew-formula.sh \
+            --tag "$TAG" \
+            --repo "ianzepp/github2md" \
+            --output github2md.rb \
+            --darwin-arm64-sha "$(sha256sum dist/github2md-${TAG}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)" \
+            --darwin-x86_64-sha "$(sha256sum dist/github2md-${TAG}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)" \
+            --linux-x86_64-sha "$(sha256sum dist/github2md-${TAG}-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)"
+
+      - name: Push formula to tap repo
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_GITHUB_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN is required to update ianzepp/homebrew-tap" >&2
+            exit 1
+          fi
+
+          git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/ianzepp/homebrew-tap.git" tap
+          cp github2md.rb tap/Formula/github2md.rb
+          cd tap
+
+          if git diff --quiet -- Formula/github2md.rb; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/github2md.rb
+          git commit -m "Update github2md to ${GITHUB_REF_NAME}"
+          git push origin HEAD:main
