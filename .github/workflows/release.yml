@@ -131,7 +131,7 @@ jobs:
           cp github2md.rb tap/Formula/github2md.rb
           cd tap
 
-          if git diff --quiet -- Formula/github2md.rb; then
+          if [ -z "$(git status --short -- Formula/github2md.rb)" ]; then
             echo "Formula already up to date"
             exit 0
           fi
