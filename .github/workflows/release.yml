@@ -87,10 +87,12 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" dist/* --clobber
+            gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+          else
+            gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes --latest dist/*
           fi
-          gh release upload "$TAG" --repo "$REPO" dist/* --clobber
 
   update-tap:
     needs: release
